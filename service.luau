@@ -38,6 +38,9 @@ local pendingPalette = nil
 local pendingTrack = nil
 local sessionCaptureBusy = false
 local restoreBusy = false
+local restoreAfterPalette = false
+local deferredRestoreCallbacks = {}
+local restoreSession
 local stopped = false
 
 -- Snapshot of Noctalia state immediately before the plugin takes control.
@@ -455,6 +458,21 @@ local applyPalette
 
 local function finishPaletteJob()
     paletteBusy = false
+
+    -- A pause/stop may have requested restoration while the palette subprocess
+    -- was running. Restore only after its callback has completed, so a late
+    -- color-scheme-set cannot race behind the restoration.
+    if restoreAfterPalette then
+        restoreAfterPalette = false
+        pendingPalette = nil
+        local callbacks = deferredRestoreCallbacks
+        deferredRestoreCallbacks = {}
+        restoreSession(function(ok)
+            for _, callback in ipairs(callbacks) do callback(ok) end
+        end)
+        return
+    end
+
     local nextJob = pendingPalette
     pendingPalette = nil
     if nextJob and not stopped then applyPalette(nextJob.artUri, nextJob.trackKey) end
@@ -590,7 +608,13 @@ end
 
 local handlePlayingTrack
 
-local function restoreSession(callback)
+restoreSession = function(callback)
+    if paletteBusy then
+        restoreAfterPalette = true
+        pendingPalette = nil
+        if callback then table.insert(deferredRestoreCallbacks, callback) end
+        return
+    end
     if restoreBusy then
         if callback then callback(false) end
         return
