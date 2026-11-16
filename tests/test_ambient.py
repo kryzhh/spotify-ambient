@@ -7,7 +7,50 @@ from pathlib import Path
 
 from PIL import Image, ImageStat
 
-from ambient import render, generate_palette
+from ambient import render, generate_palette, generate_and_apply_palette
+
+
+class PaletteApplyTests(unittest.TestCase):
+    def test_palette_generation_and_application_share_one_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            destination = root / "palette.json"
+            lock_path = root / "palette.lock"
+            completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+            with patch("ambient.generate_palette") as generate, patch(
+                "ambient.subprocess.run", return_value=completed
+            ) as run:
+                generate_and_apply_palette(
+                    "file:///tmp/cover.png", destination, "SpotifyAmbientDynamic-test", lock_path
+                )
+
+            generate.assert_called_once_with("file:///tmp/cover.png", destination)
+            run.assert_called_once_with(
+                [
+                    "noctalia", "msg", "color-scheme-set",
+                    "custom", "SpotifyAmbientDynamic-test",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertTrue(lock_path.is_file())
+
+    def test_palette_apply_does_not_change_theme_when_generation_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("ambient.generate_palette", side_effect=RuntimeError("generation failed")), patch(
+                "ambient.subprocess.run"
+            ) as run:
+                with self.assertRaisesRegex(RuntimeError, "generation failed"):
+                    generate_and_apply_palette(
+                        "file:///tmp/cover.png",
+                        root / "palette.json",
+                        "SpotifyAmbientDynamic-test",
+                        root / "palette.lock",
+                    )
+            run.assert_not_called()
 
 
 class AmbientRenderTests(unittest.TestCase):
