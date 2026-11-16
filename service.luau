@@ -11,6 +11,7 @@ end
 local helper = pluginDir .. "/ambient.py"
 local statePath = dataDir .. "/state.json"
 local cacheDir = dataDir .. "/wallpapers"
+local paletteLockPath = dataDir .. "/palette.lock"
 
 local function configHome()
     local root = noctalia.getenv("NOCTALIA_CONFIG_HOME")
@@ -497,44 +498,19 @@ applyPalette = function(artUri, trackKey)
             return
         end
 
-        local accepted = noctalia.runAsync({ "python3", helper, "palette", artUri, palettePath }, function(result)
-            if result.exitCode ~= 0 then
-                log("ERROR: " .. processFailure("palette generation for track " .. trackKey, result))
+        local accepted = noctalia.runAsync({
+            "python3", helper, "palette-apply", artUri, palettePath, paletteName, paletteLockPath,
+        }, function(result)
+            if result.exitCode == 0 then
+                appliedScheme = { source = "custom", name = paletteName }
+                paletteApplied = true
+                saveState()
+                log("Applied dynamic palette " .. paletteName)
+            else
+                log("ERROR: " .. processFailure("palette generation/application for track " .. trackKey, result))
                 if activeKey == trackKey then activeKey = "" end
-                finishPaletteJob()
-                return
             end
-            if stopped or activeKey ~= trackKey then
-                finishPaletteJob()
-                return
-            end
-
-            captureThemeBeforeApply(trackKey, function(stillReady)
-                if not stillReady or stopped or activeKey ~= trackKey then
-                    finishPaletteJob()
-                    return
-                end
-
-                local applied = noctalia.runAsync({
-                    "noctalia", "msg", "color-scheme-set", "custom", paletteName,
-                }, function(applyResult)
-                    if applyResult.exitCode == 0 then
-                        appliedScheme = { source = "custom", name = paletteName }
-                        paletteApplied = true
-                        saveState()
-                        log("Applied dynamic palette " .. paletteName)
-                    else
-                        log("ERROR: " .. processFailure("color-scheme-set for palette " .. tostring(paletteName), applyResult))
-                        if activeKey == trackKey then activeKey = "" end
-                    end
-                    finishPaletteJob()
-                end)
-                if not applied then
-                    log("Could not start Noctalia color-scheme-set")
-                    if activeKey == trackKey then activeKey = "" end
-                    finishPaletteJob()
-                end
-            end)
+            finishPaletteJob()
         end)
         if not accepted then
             log("Could not start palette generator")
@@ -758,23 +734,33 @@ local function restoreOnExit()
     if originalScheme then
         local originalCommand = "noctalia msg color-scheme-set " ..
             shellQuote(originalScheme.source) .. " " .. shellQuote(originalScheme.name)
-        local appliedSchemeText = nil
+        local restoreSchemePatterns = {}
         if type(appliedScheme) == "table" and appliedScheme.source == "custom"
             and type(appliedScheme.name) == "string" then
-            appliedSchemeText = "custom " .. appliedScheme.name
+            table.insert(restoreSchemePatterns, shellQuote("custom " .. appliedScheme.name))
         end
+        -- The helper applies the theme before its completion callback can update
+        -- appliedScheme. Include the in-flight target so shutdown still restores
+        -- the original theme if that apply completed just before onExit.
+        if paletteBusy and type(paletteName) == "string" then
+            local inFlightScheme = "custom " .. paletteName
+            local quotedInFlight = shellQuote(inFlightScheme)
+            if not table.find(restoreSchemePatterns, quotedInFlight) then
+                table.insert(restoreSchemePatterns, quotedInFlight)
+            end
+        end
+        local restoreSchemePattern = table.concat(restoreSchemePatterns, "|")
 
         local snippet
-        if appliedSchemeText then
-            -- Restore only the exact scheme we applied. If the user selected
-            -- another palette created by this plugin, keep that palette too.
-            local appliedPattern = shellQuote(appliedSchemeText)
+        if restoreSchemePattern ~= "" then
+            -- Restore only a scheme known to have been applied by this plugin.
+            -- Other plugin-created palettes remain untouched if selected manually.
             local preserveOtherOwned = ownedSchemePattern ~= ""
                 and "case \"$current\" in " .. ownedSchemePattern .. ") : ;; *) " .. cleanupAction .. " ;; esac; "
                 or cleanupAction .. "; "
-            snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; if [ "$current" = ' ..
-                appliedPattern .. ' ]; then if ' .. originalCommand .. ' >/dev/null 2>&1; then ' ..
-                cleanupAction .. '; fi; else ' .. preserveOtherOwned .. 'fi; '
+            snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; case "$current" in ' ..
+                restoreSchemePattern .. ') if ' .. originalCommand .. ' >/dev/null 2>&1; then ' ..
+                cleanupAction .. '; fi ;; *) ' .. preserveOtherOwned .. 'esac; '
         elseif ownedSchemePattern ~= "" then
             -- Without an exact applied value, never remove a palette that is
             -- currently selected by the user.
@@ -795,7 +781,12 @@ local function restoreOnExit()
     end
 
     if #commandParts == 0 then return end
-    local accepted = noctalia.runAsync(table.concat(commandParts))
+    -- The detached cleanup waits for any palette generation/application job
+    -- to release the same advisory lock before inspecting or restoring the theme.
+    local cleanupScript = table.concat(commandParts)
+    local command = "flock --exclusive --wait 180 " .. shellQuote(paletteLockPath) ..
+        " /bin/sh -c " .. shellQuote(cleanupScript)
+    local accepted = noctalia.runAsync(command)
     if not accepted then log("Could not start detached wallpaper/theme restoration") end
 end
 
