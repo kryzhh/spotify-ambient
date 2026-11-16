@@ -107,6 +107,19 @@ local function saveState()
     if not ok then log("Could not persist plugin state: " .. tostring(err)) end
 end
 
+local function isOwnedPalettePath(path)
+    if type(path) ~= "string" then return false end
+    local directoryPrefix = paletteDir .. "/"
+    if string.sub(path, 1, #directoryPrefix) ~= directoryPrefix then return false end
+    local filename = string.sub(path, #directoryPrefix + 1)
+    if filename == "" or string.find(filename, "/", 1, true)
+        or string.find(filename, "\\", 1, true) then
+        return false
+    end
+    return string.sub(filename, 1, #PALETTE_PREFIX + 1) == PALETTE_PREFIX .. "-"
+        and string.sub(filename, -5) == ".json"
+end
+
 local function loadState()
     local raw = noctalia.readFile(statePath)
     if not raw then return end
@@ -135,11 +148,21 @@ local function loadState()
         appliedScheme = decoded.appliedScheme
     end
     if type(decoded.paletteName) == "string" then paletteName = decoded.paletteName end
-    if type(decoded.palettePath) == "string" then palettePath = decoded.palettePath end
+    if type(decoded.palettePath) == "string" and isOwnedPalettePath(decoded.palettePath) then
+        palettePath = decoded.palettePath
+    end
     if type(decoded.paletteTrackKey) == "string" then paletteTrackKey = decoded.paletteTrackKey end
-    if type(decoded.ownedPalettePaths) == "table" then ownedPalettePaths = decoded.ownedPalettePaths end
-    paletteOwned = decoded.paletteOwned == true
-    if paletteOwned and palettePath then ownedPalettePaths[palettePath] = true end
+    if type(decoded.ownedPalettePaths) == "table" then
+        local validatedOwnedPaths = {}
+        for path, owned in pairs(decoded.ownedPalettePaths) do
+            if owned == true and isOwnedPalettePath(path) then
+                validatedOwnedPaths[path] = true
+            end
+        end
+        ownedPalettePaths = validatedOwnedPaths
+    end
+    paletteOwned = decoded.paletteOwned == true and palettePath ~= nil
+    if paletteOwned then ownedPalettePaths[palettePath] = true end
     paletteApplied = decoded.paletteApplied == true
 
     -- Old builds did not store the wallpaper path that they applied. We can
@@ -685,15 +708,22 @@ local function restoreOnExit()
     end
 
     local cleanupParts = {}
+    local ownedSchemePatterns = {}
     for path, owned in pairs(ownedPalettePaths) do
-        if owned == true and type(path) == "string" then
+        if owned == true and isOwnedPalettePath(path) then
             table.insert(cleanupParts, "rm -f -- " .. shellQuote(path))
+            local filename = string.match(path, "([^/]+)%.json$")
+            if filename then table.insert(ownedSchemePatterns, shellQuote("custom " .. filename)) end
         end
     end
-    if palettePath and paletteOwned then
+    if palettePath and paletteOwned and isOwnedPalettePath(palettePath)
+        and ownedPalettePaths[palettePath] ~= true then
         table.insert(cleanupParts, "rm -f -- " .. shellQuote(palettePath))
+        local filename = string.match(palettePath, "([^/]+)%.json$")
+        if filename then table.insert(ownedSchemePatterns, shellQuote("custom " .. filename)) end
     end
     local cleanupCommand = table.concat(cleanupParts, "; ")
+    local ownedSchemePattern = table.concat(ownedSchemePatterns, "|")
     -- An empty cleanup list must still produce a valid shell command. In
     -- particular, "then ; fi" is a syntax error and would abort all restoration.
     local cleanupAction = cleanupCommand ~= "" and cleanupCommand or ":"
@@ -701,16 +731,40 @@ local function restoreOnExit()
     if originalScheme then
         local originalCommand = "noctalia msg color-scheme-set " ..
             shellQuote(originalScheme.source) .. " " .. shellQuote(originalScheme.name)
-        local prefixPattern = shellQuote("custom " .. PALETTE_PREFIX) ..
-            "|" .. shellQuote("custom " .. PALETTE_PREFIX .. "-") .. "*)"
-        -- Only delete plugin palettes after Noctalia has switched away from
-        -- them. If the restore command fails, keep the selected JSON intact.
-        local snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; case "$current" in ' ..
-            prefixPattern .. ') if ' .. originalCommand .. ' >/dev/null 2>&1; then ' .. cleanupAction ..
-            '; fi ;; *) ' .. cleanupAction .. ' ;; esac; '
+        local appliedSchemeText = nil
+        if type(appliedScheme) == "table" and appliedScheme.source == "custom"
+            and type(appliedScheme.name) == "string" then
+            appliedSchemeText = "custom " .. appliedScheme.name
+        end
+
+        local snippet
+        if appliedSchemeText then
+            -- Restore only the exact scheme we applied. If the user selected
+            -- another palette created by this plugin, keep that palette too.
+            local appliedPattern = shellQuote(appliedSchemeText)
+            local preserveOtherOwned = ownedSchemePattern ~= ""
+                and "case \"$current\" in " .. ownedSchemePattern .. ") : ;; *) " .. cleanupAction .. " ;; esac; "
+                or cleanupAction .. "; "
+            snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; if [ "$current" = ' ..
+                appliedPattern .. ' ]; then if ' .. originalCommand .. ' >/dev/null 2>&1; then ' ..
+                cleanupAction .. '; fi; else ' .. preserveOtherOwned .. 'fi; '
+        elseif ownedSchemePattern ~= "" then
+            -- Without an exact applied value, never remove a palette that is
+            -- currently selected by the user.
+            snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; case "$current" in ' ..
+                ownedSchemePattern .. ') : ;; *) ' .. cleanupAction .. ' ;; esac; '
+        else
+            snippet = cleanupAction .. "; "
+        end
         table.insert(commandParts, snippet)
     elseif cleanupCommand ~= "" then
-        table.insert(commandParts, cleanupCommand .. "; ")
+        if ownedSchemePattern ~= "" then
+            local snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; case "$current" in ' ..
+                ownedSchemePattern .. ') : ;; *) ' .. cleanupCommand .. ' ;; esac; '
+            table.insert(commandParts, snippet)
+        else
+            table.insert(commandParts, cleanupCommand .. "; ")
+        end
     end
 
     if #commandParts == 0 then return end
