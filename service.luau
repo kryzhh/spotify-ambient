@@ -116,8 +116,11 @@ local function isOwnedPalettePath(path)
         or string.find(filename, "\\", 1, true) then
         return false
     end
-    return string.sub(filename, 1, #PALETTE_PREFIX + 1) == PALETTE_PREFIX .. "-"
-        and string.sub(filename, -5) == ".json"
+    if string.sub(filename, -5) ~= ".json" then return false end
+    local stem = string.sub(filename, 1, #filename - 5)
+    local token = string.sub(stem, #PALETTE_PREFIX + 2)
+    return string.sub(stem, 1, #PALETTE_PREFIX + 1) == PALETTE_PREFIX .. "-"
+        and token ~= "" and string.match(token, "^[%w_%-]+$") ~= nil
 end
 
 local function loadState()
