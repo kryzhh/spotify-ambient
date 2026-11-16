@@ -694,6 +694,9 @@ local function restoreOnExit()
         table.insert(cleanupParts, "rm -f -- " .. shellQuote(palettePath))
     end
     local cleanupCommand = table.concat(cleanupParts, "; ")
+    -- An empty cleanup list must still produce a valid shell command. In
+    -- particular, "then ; fi" is a syntax error and would abort all restoration.
+    local cleanupAction = cleanupCommand ~= "" and cleanupCommand or ":"
 
     if originalScheme then
         local originalCommand = "noctalia msg color-scheme-set " ..
@@ -703,8 +706,8 @@ local function restoreOnExit()
         -- Only delete plugin palettes after Noctalia has switched away from
         -- them. If the restore command fails, keep the selected JSON intact.
         local snippet = 'current="$(noctalia msg color-scheme-get 2>/dev/null)"; case "$current" in ' ..
-            prefixPattern .. ') if ' .. originalCommand .. ' >/dev/null 2>&1; then ' .. cleanupCommand ..
-            '; fi ;; *) ' .. cleanupCommand .. ' ;; esac; '
+            prefixPattern .. ') if ' .. originalCommand .. ' >/dev/null 2>&1; then ' .. cleanupAction ..
+            '; fi ;; *) ' .. cleanupAction .. ' ;; esac; '
         table.insert(commandParts, snippet)
     elseif cleanupCommand ~= "" then
         table.insert(commandParts, cleanupCommand .. "; ")
