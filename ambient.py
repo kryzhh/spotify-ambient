@@ -7,6 +7,7 @@ import argparse
 import ipaddress
 import json
 import os
+import fcntl
 import socket
 import subprocess
 import sys
@@ -275,6 +276,11 @@ def main() -> int:
     palette_command.add_argument("--preview", type=Path, help="write a visual PNG preview of the dark variant")
     palette_command.add_argument("--preview-light", type=Path, help="also write a visual PNG preview of the light variant")
     palette_command.add_argument("--scheme", default="m3-content", choices=("m3-content", "m3-tonal-spot", "m3-fruit-salad", "m3-rainbow", "m3-monochrome"), help="Noctalia image palette generator")
+    apply_command = sub.add_parser("palette-apply", help="generate and apply a palette under the shutdown lock")
+    apply_command.add_argument("art_uri")
+    apply_command.add_argument("destination", type=Path)
+    apply_command.add_argument("palette_name")
+    apply_command.add_argument("lock_path", type=Path)
     doctor_command = sub.add_parser("doctor", help="check dependencies and Noctalia/Spotify integration")
     doctor_command.add_argument("--json", action="store_true", help="print machine-readable JSON")
     args = parser.parse_args()
@@ -285,6 +291,8 @@ def main() -> int:
     try:
         if args.command == "render":
             render(args.art_uri, args.width, args.height, args.destination)
+        elif args.command == "palette-apply":
+            generate_and_apply_palette(args.art_uri, args.destination, args.palette_name, args.lock_path)
         else:
             palette = generate_palette(args.art_uri, args.destination, scheme=args.scheme)
             if args.preview:
@@ -662,6 +670,39 @@ def generate_palette(uri: str, destination: Path, *, scheme: str = "m3-content")
         except FileNotFoundError:
             pass
     return palette
+
+def generate_and_apply_palette(
+    uri: str,
+    destination: Path,
+    palette_name: str,
+    lock_path: Path,
+) -> None:
+    """Generate and apply one palette while holding the shared shutdown lock.
+
+    The lock is also acquired by detached service-exit cleanup. Keeping it for
+    both generation and the Noctalia IPC apply prevents cleanup from restoring
+    the previous theme between those two operations.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        generate_palette(uri, destination)
+        try:
+            result = subprocess.run(
+                ["noctalia", "msg", "color-scheme-set", "custom", palette_name],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("Noctalia CLI was not found; could not apply generated palette") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Noctalia color-scheme-set timed out after 15 seconds") from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "Noctalia returned no diagnostic output").strip()
+            raise RuntimeError(f"Noctalia color-scheme-set failed (exit {result.returncode}): {detail}")
+
 
 def save_palette_preview(palette_data: dict, destination: Path, *, mode: str = "dark") -> None:
     """Render a compact swatch sheet for either generated palette variant."""
