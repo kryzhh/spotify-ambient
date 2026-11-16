@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from PIL import Image, ImageStat
@@ -60,6 +60,35 @@ class AmbientRenderTests(unittest.TestCase):
         with Image.open(output) as result:
             mean_sat = ImageStat.Stat(result.convert("HSV")).mean[1]
             self.assertGreater(mean_sat, 75)
+
+    def test_oversized_image_is_rejected_before_pixel_decode(self):
+        import ambient
+
+        class OversizedImage:
+            width = 10_000
+            height = 10_000
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def load(self):
+                raise AssertionError("pixel data must not be decoded")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "oversized.png"
+            source.write_bytes(b"not decoded by the mocked opener")
+            opened = OversizedImage()
+            with patch("ambient.Image.open", return_value=opened):
+                with self.assertRaisesRegex(ValueError, "pixel safety limit"):
+                    ambient.load_artwork(source.as_uri())
+
+    def test_file_uri_rejects_remote_authority(self):
+        import ambient
+        with self.assertRaisesRegex(ValueError, "local machine"):
+            ambient.load_artwork("file://remote-host/tmp/cover.png")
 
 
 if __name__ == "__main__":
@@ -165,6 +194,18 @@ class PaletteGenerationTests(unittest.TestCase):
             for index, name in enumerate(("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")):
                 tokens[f"terminal_{group}_{name}"] = f"#{index + 1:02x}2233"
         return tokens
+
+    def test_noctalia_token_map_rejects_malformed_hex_values(self):
+        from ambient import palette_from_noctalia_tokens
+        tokens = self._noctalia_token_fixture()
+        tokens["primary"] = "#12GG56"
+        with self.assertRaisesRegex(ValueError, "primary"):
+            palette_from_noctalia_tokens(tokens, mode="dark")
+
+    def test_noctalia_token_map_rejects_non_object_json(self):
+        from ambient import palette_from_noctalia_tokens
+        with self.assertRaisesRegex(ValueError, "JSON object"):
+            palette_from_noctalia_tokens([], mode="dark")
 
     def test_noctalia_token_map_converts_to_v2_custom_palette(self):
         from ambient import palette_from_noctalia_tokens
