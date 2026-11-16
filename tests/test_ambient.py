@@ -91,6 +91,31 @@ class AmbientRenderTests(unittest.TestCase):
             ambient.load_artwork("file://remote-host/tmp/cover.png")
 
 
+    def test_http_artwork_rejects_loopback_addresses(self):
+        import ambient
+        with self.assertRaisesRegex(ValueError, "public IP addresses"):
+            ambient._validate_artwork_http_url("http://127.0.0.1/cover.png")
+
+    def test_http_artwork_rejects_private_dns_results(self):
+        import ambient
+        private_result = [
+            (2, 1, 6, "", ("10.0.0.12", 443))
+        ]
+        with patch("ambient.socket.getaddrinfo", return_value=private_result):
+            with self.assertRaisesRegex(ValueError, "public IP addresses"):
+                ambient._validate_artwork_http_url("https://art.example/cover.png")
+
+    def test_http_redirect_rejects_loopback_target(self):
+        from urllib.request import Request
+        from ambient import _SafeArtworkRedirectHandler
+        handler = _SafeArtworkRedirectHandler()
+        request = Request("https://art.example/cover.png")
+        with self.assertRaisesRegex(ValueError, "public IP addresses"):
+            handler.redirect_request(
+                request, None, 302, "Found", {}, "http://127.0.0.1/internal"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
 
