@@ -19,6 +19,7 @@ Turn the currently playing Spotify album cover into an ambient wallpaper and gen
 - `python3` 3.10+ with `Pillow` installed.
 - The `noctalia` CLI supplied by Noctalia Shell, including its native `theme` command.
 - The standard Linux `sh` and `rm` utilities for detached cleanup when the plugin exits.
+- `flock` (from `util-linux`) to serialize palette generation/application with detached shutdown cleanup.
 - A Linux desktop session running Noctalia and Spotify as the same user.
 
 Install the external dependencies with your distribution's package manager. For example:
@@ -26,19 +27,19 @@ Install the external dependencies with your distribution's package manager. For 
 **Arch Linux / CachyOS**
 
 ```bash
-sudo pacman -S --needed playerctl python python-pillow
+sudo pacman -S --needed playerctl python python-pillow util-linux
 ```
 
 **Debian / Ubuntu**
 
 ```bash
-sudo apt install playerctl python3 python3-pil
+sudo apt install playerctl python3 python3-pil util-linux
 ```
 
 **Fedora**
 
 ```bash
-sudo dnf install playerctl python3 python3-pillow
+sudo dnf install playerctl python3 python3-pillow util-linux
 ```
 
 ## Usage
@@ -73,7 +74,7 @@ The plugin does not expose custom IPC actions. Its service is managed through **
 
 ### Processes
 
-The service starts `playerctl` to query MPRIS, `python3` to render wallpapers and build palette files, and `noctalia` for native theme generation and Noctalia IPC. The helper uses Python's standard-library `urllib` client to retrieve artwork when the MPRIS URI is HTTP(S). The exit cleanup uses `sh` and `rm`; these are standard Linux utilities.
+The service starts `playerctl` to query MPRIS, `python3` to render wallpapers and build palette files, and `noctalia` for native theme generation and Noctalia IPC. The helper uses Python's standard-library `urllib` client to retrieve artwork when the MPRIS URI is HTTP(S). The exit cleanup uses `sh` and `rm`; these are standard Linux utilities. `flock` serializes detached cleanup with the palette helper so cleanup cannot restore the old theme between palette generation and application.
 
 ### Behavior and limitations
 
