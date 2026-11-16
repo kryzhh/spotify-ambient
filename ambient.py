@@ -204,7 +204,7 @@ def collect_diagnostics() -> dict:
 
     return {
         "report_version": 1,
-        "plugin_version": "0.4.1",
+        "plugin_version": "0.4.2",
         "checks": checks,
         "notes": [
             "This report does not include Spotify track titles, artwork URLs, credentials, or file contents.",
