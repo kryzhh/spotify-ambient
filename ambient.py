@@ -24,30 +24,39 @@ BLUR_FRACTION = 0.045  # reveal broad cover-art forms without exposing fine text
 MIN_BLUR_RADIUS = 18
 
 
+def _decode_artwork(image: Image.Image) -> Image.Image:
+    """Validate image dimensions before decoding pixel data."""
+    if image.width <= 0 or image.height <= 0 or image.width * image.height > MAX_SOURCE_PIXELS:
+        raise ValueError("Artwork dimensions exceed the pixel safety limit")
+    image.load()
+    return ImageOps.exif_transpose(image).convert("RGB")
+
+
 def load_artwork(uri: str) -> Image.Image:
     parsed = urlparse(uri)
     if parsed.scheme == "file":
+        if parsed.netloc not in ("", "localhost"):
+            raise ValueError("Artwork file URI must refer to the local machine")
         source = Path(unquote(parsed.path))
         if not source.is_file():
             raise ValueError("MPRIS artwork file does not exist")
         if source.stat().st_size > MAX_DOWNLOAD:
             raise ValueError("Artwork exceeds the 12 MiB safety limit")
-        image = Image.open(source)
+        with Image.open(source) as image:
+            return _decode_artwork(image)
     elif parsed.scheme in ("http", "https"):
-        request = Request(uri, headers={"User-Agent": "Spotify-Ambient/0.4.1"})
+        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            raise ValueError("Artwork URL must contain a valid host and no embedded credentials")
+        request = Request(uri, headers={"User-Agent": "Spotify-Ambient/0.4.2"})
         with urlopen(request, timeout=15) as response:
             data = response.read(MAX_DOWNLOAD + 1)
         if len(data) > MAX_DOWNLOAD:
             raise ValueError("Artwork exceeds the 12 MiB safety limit")
         import io
-        image = Image.open(io.BytesIO(data))
+        with Image.open(io.BytesIO(data)) as image:
+            return _decode_artwork(image)
     else:
         raise ValueError("Unsupported artwork URI scheme; expected https:// or file://")
-
-    image.load()
-    if image.width * image.height > MAX_SOURCE_PIXELS:
-        raise ValueError("Artwork dimensions exceed the pixel safety limit")
-    return ImageOps.exif_transpose(image).convert("RGB")
 
 
 def _mean_saturation(image: Image.Image) -> float:
@@ -540,7 +549,18 @@ def palette_from_noctalia_tokens(tokens: dict, *, mode: str = "dark") -> dict:
     ansi_names = ("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")
     required = list(role_keys) + list(terminal_direct.values())
     required += [f"terminal_{group}_{name}" for group in ("normal", "bright") for name in ansi_names]
-    missing = [key for key in required if not isinstance(tokens.get(key), str) or not tokens[key].startswith("#")]
+    if not isinstance(tokens, dict):
+        raise ValueError("Noctalia theme output must be a JSON object")
+
+    def is_hex_colour(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 7
+            and value[0] == "#"
+            and all(character in "0123456789abcdefABCDEF" for character in value[1:])
+        )
+
+    missing = [key for key in required if not is_hex_colour(tokens.get(key))]
     if missing:
         raise ValueError("Noctalia theme output is missing required colour tokens: " + ", ".join(missing))
 
