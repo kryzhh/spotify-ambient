@@ -4,17 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
+import fcntl
 import ipaddress
 import json
 import os
-import fcntl
+import platform
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import traceback
-import shutil
-import platform
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -306,9 +307,6 @@ def main() -> int:
 
 
 # ---- Noctalia image-theme palette generation (palette format 2) ----
-
-import colorsys
-import json
 
 
 def _relative_luminance(hex_colour: str) -> float:
