@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,7 @@ import shutil
 import platform
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat, __version__ as PILLOW_VERSION
 
@@ -22,6 +24,32 @@ MAX_DOWNLOAD = 12 * 1024 * 1024
 MAX_SOURCE_PIXELS = 50_000_000
 BLUR_FRACTION = 0.045  # reveal broad cover-art forms without exposing fine text/details
 MIN_BLUR_RADIUS = 18
+
+
+def _validate_artwork_http_url(url: str) -> None:
+    """Reject non-public destinations, including redirect targets."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Artwork URL must use HTTP(S) and include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Artwork URL must not contain embedded credentials")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            addresses = [ipaddress.ip_address(parsed.hostname)]
+        except ValueError:
+            resolved = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+            addresses = [ipaddress.ip_address(item[4][0]) for item in resolved]
+    except (OSError, ValueError) as exc:
+        raise ValueError("Artwork URL hostname could not be safely resolved") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise ValueError("Artwork URL must resolve only to public IP addresses")
+
+
+class _SafeArtworkRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        _validate_artwork_http_url(new_url)
+        return super().redirect_request(request, file_pointer, code, message, headers, new_url)
 
 
 def _decode_artwork(image: Image.Image) -> Image.Image:
@@ -45,10 +73,10 @@ def load_artwork(uri: str) -> Image.Image:
         with Image.open(source) as image:
             return _decode_artwork(image)
     elif parsed.scheme in ("http", "https"):
-        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
-            raise ValueError("Artwork URL must contain a valid host and no embedded credentials")
+        _validate_artwork_http_url(uri)
         request = Request(uri, headers={"User-Agent": "Spotify-Ambient/0.4.2"})
-        with urlopen(request, timeout=15) as response:
+        opener = build_opener(_SafeArtworkRedirectHandler)
+        with opener.open(request, timeout=15) as response:
             data = response.read(MAX_DOWNLOAD + 1)
         if len(data) > MAX_DOWNLOAD:
             raise ValueError("Artwork exceeds the 12 MiB safety limit")
