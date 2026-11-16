@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from pathlib import Path
 
 from PIL import Image, ImageStat
@@ -115,9 +115,6 @@ class AmbientRenderTests(unittest.TestCase):
                 request, None, 302, "Found", {}, "http://127.0.0.1/internal"
             )
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 def ambient_hls_lightness(colour):
     import colorsys
@@ -352,3 +349,7 @@ class DiagnosticReportTests(unittest.TestCase):
         ok, detail = _run_diagnostic_command(["this-command-should-not-exist-spotify-ambient"])
         self.assertFalse(ok)
         self.assertIn("command not found", detail)
+
+
+if __name__ == "__main__":
+    unittest.main()
