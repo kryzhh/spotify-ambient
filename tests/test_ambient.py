@@ -315,7 +315,7 @@ class DiagnosticReportTests(unittest.TestCase):
         with patch("ambient.shutil.which", side_effect=fake_which), patch("ambient.subprocess.run", side_effect=fake_run):
             report = collect_diagnostics()
 
-        self.assertEqual(report["plugin_version"], "0.4.1")
+        self.assertEqual(report["plugin_version"], "0.4.2")
         self.assertIn("spotify_mpris", {item["name"] for item in report["checks"]})
         serialized = json.dumps(report)
         self.assertNotIn("https://", serialized)
