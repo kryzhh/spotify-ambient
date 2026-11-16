@@ -1,6 +1,6 @@
 id = "kryzhh/spotify-ambient"
 name = "Spotify Ambient"
-version = "0.4.1"
+version = "0.4.2"
 plugin_api = 44
 author = "kryzhh"
 license = "MIT"
