@@ -4,6 +4,8 @@ A local Noctalia plugin that follows Spotify playback, creates an ambient wallpa
 
 **Current package: 0.4.0** · **Noctalia 5.5.0+ / plugin API 25**
 
+**OFFICIALLY PART OF NOCTALIA'S COMMUNITY PLUGINS. SEARCH `kryzhh/spotify-ambient`**
+
 This repository contains the versioned source distribution under `releases/`. The full source, tests, translations, and development guide are included in that archive.
 
 ## Features
